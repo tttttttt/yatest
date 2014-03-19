@@ -118,45 +118,34 @@ sub validate_flags {
 sub parse_complex_response {
     my ($method, $data, $multi, $from_str) = @_;
 
-=cmnt
-|200
-VALUE set_test_key2 0 2
-25
-VALUE rrr 0 3
-yyy
-VALUE xxx 0 3
-qqq
-END
-|
+    my $crlf;
 
-|25
-END
-|
-=cut
     if($from_str) {
-        if($multi) {
-
-        } else {
-
-        }
+        $crlf = '';
+    } else {
+        $crlf = "\r\n";
     }
 
     if($retrieval_cmds{$method}) {
-        my (@values, $fetch_next);
-        foreach my $row (@$data) {
-            if($row =~ m/^VALUE (?:.+)\r\n/) {
-                $fetch_next = 1;
-                next;
-            } else {
-                if($fetch_next) {
-                    $row =~ m/^(.+)\r\n/;
-                    push(@values, $1);
-                    $fetch_next = 0;
+        if($from_str && !$multi) {
+            return $data->[0];
+        } else {
+            my (@values, $fetch_next);
+            foreach my $row (@$data) {
+                if($row =~ m/^VALUE (?:.+)$crlf/) {
+                    $fetch_next = 1;
+                    next;
+                } else {
+                    if($fetch_next) {
+                        $row =~ m/^(.+)$crlf/;
+                        push(@values, $1);
+                        $fetch_next = 0;
+                    }
                 }
             }
+    
+            return $multi ? \@values : $values[0];
         }
-
-        return $multi ? \@values : $values[0];
     } elsif($stats_cmds{$method}) {
         my @stats;
 
