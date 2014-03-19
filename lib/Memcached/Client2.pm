@@ -12,55 +12,18 @@ use IO::Select;
 use AnyEvent;
 use AnyEvent::Handle;
 use AnyEvent::Socket;
-use Memcached::Client2::Util qw /validate_params/;
-
-require Exporter;
-our @ISA = qw(Exporter);
-our @EXPORT_OK = qw/%all_cmds %cas_cmds %storage_cmds %retrieval_cmds %deletion_cmds %incr_decr_cmds %touch_cmds %stats_cmds/;
-
-our %cas_cmds = (
-    'cas' => 1,
-);
-
-our %storage_cmds = (
-    'add' => 1,
-    'append' => 1,
-    'prepend' => 1,
-    'replace' => 1,
-    'set' => 1,
-    %cas_cmds,
-);
-
-our %retrieval_cmds = (
-    'get' => 1,
-    'gets' => 1,
-);
-
-our %deletion_cmds = (
-    'delete' => 1,
-);
-
-our %incr_decr_cmds = (
-    'decr' => 1,
-    'incr' => 1,
-);
-
-our %touch_cmds = (
-    'touch' => 1,
-);
-
-our %stats_cmds = (
-    'stats' => 1,
-);
-
-our %all_cmds = (
-    %storage_cmds,
-    %retrieval_cmds,
-    %deletion_cmds,
-    %incr_decr_cmds,
-    %touch_cmds,
-    %stats_cmds,
-);
+use Memcached::Client2::Util qw /
+    parse_complex_response
+    validate_params
+    %all_cmds
+    %cas_cmds
+    %storage_cmds
+    %retrieval_cmds
+    %deletion_cmds
+    %incr_decr_cmds
+    %touch_cmds
+    %stats_cmds
+/;
 
 sub trim {
   my ($text) = @_;
@@ -188,7 +151,7 @@ sub _read_response {
     $row = <$socket>;
 
     if($row =~ m/^(?:ERROR|CLIENT_ERROR|SERVER_ERROR)/) {
-        die("error: $row");
+        return "error: $row";
     } else {
         push(@data, $row);
 
@@ -234,38 +197,15 @@ sub _read_response {
             }
         }
     }
-    
-    if($retrieval_cmds{$method}) {
-        my (@values, $fetch_next);
-        foreach my $row (@data) {
-            if($row =~ m/^VALUE (?:.+)\r\n/) {
-                $fetch_next = 1;
-                next;
-            } else {
-                if($fetch_next) {
-                    $row =~ m/^(.+)\r\n/;
-                    push(@values, $1);
-                    $fetch_next = 0;
-                }
-            }
-        }
 
-        return $multi ? \@values : $values[0];
-    } elsif($stats_cmds{$method}) {
-        my @stats;
-
-        foreach my $row (@data) {
-            if($row =~ m/^STAT (.+)$/) {
-                push(@stats, $1);
-            }
-        }
-
-        return \@stats;
-    }
+    return parse_complex_response($method, \@data, $multi);
 }
 
 sub _async_request {
     my ($self, $cmd, $method, $noreply, $multi) = @_;
+
+    my $status = 0;
+    my @data;
 
     my $done = AnyEvent->condvar;
 
@@ -295,7 +235,49 @@ sub _async_request {
                 my $row = $_[0]->rbuf;
                 $_[0]->rbuf = '';
 
-
+                if($row =~ m/^(?:ERROR|CLIENT_ERROR|SERVER_ERROR)/) {
+                    $status = "error: $row";
+                } else {
+                    push(@data, $row);
+            
+                    if($storage_cmds{$method}) {
+                        if($row eq "STORED\r\n") {
+                            $status = 1;
+                        } else {
+                            $status = undef;
+                        }
+                    } elsif($deletion_cmds{$method}) {
+                        if($row eq "DELETED\r\n") {
+                            $status = 1;
+                        } else {
+                            $status = undef;
+                        }
+                    } elsif($incr_decr_cmds{$method}) {
+                        if($row eq "NOT_FOUND\r\n") {
+                            $status = undef;
+                        } else {
+                            $status = trim($row);
+                        }
+                    } elsif($touch_cmds{$method}) {
+                        if($row eq "TOUCHED\r\n") {
+                            $status = 1;
+                        } else {
+                            $status = undef;
+                        }
+                    } elsif($retrieval_cmds{$method}) {
+                        push(@data, $row);
+        
+                        if($row eq "END\r\n") {
+                            last;
+                        }
+                    } elsif($stats_cmds{$method}) {
+                        push(@data, $row);
+        
+                        if($row eq "END\r\n") {
+                            last;
+                        }
+                    }
+                }
             });
 
             $done->send;
@@ -303,8 +285,12 @@ sub _async_request {
     });
 
     $done->recv;
-    
-    return 100;
+
+    if($status == 0) {
+        return parse_complex_response($method, \@data, $multi);
+    } else {
+        return $status;
+    }
 }
 
 sub _do_cmd {
