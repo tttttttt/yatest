@@ -14,6 +14,7 @@ use AnyEvent::Handle;
 use AnyEvent::Socket;
 use Memcached::Client2::Util qw /
     parse_complex_response
+    parse_complex_response2
     validate_params
     %all_cmds
     %cas_cmds
@@ -205,7 +206,7 @@ sub _async_request {
     my ($self, $cmd, $method, $noreply, $multi) = @_;
 
     my $status = 0;
-    my @data;
+    my $data;
 
     my $done = AnyEvent->condvar;
 
@@ -225,69 +226,77 @@ sub _async_request {
             },
         );
 
-        my $data = $cmd->{'request'} . (defined($cmd->{'value'}) ? $cmd->{'value'} : '');
+        my $cmd = $cmd->{'request'} . (defined($cmd->{'value'}) ? $cmd->{'value'} : '');
 
-        $handle->push_write($data);
+        $handle->push_write($cmd);
         $handle->push_read('line' => sub {
             my ($handle, $line) = @_;
 
-            $handle->on_read (sub {
-                my $row = $_[0]->rbuf;
-                $_[0]->rbuf = '';
+            if($line =~ m/^(?:ERROR|CLIENT_ERROR|SERVER_ERROR)/) {
+                $status = "error: $line";
+            } else {
+                $data = $line;
 
-                if($row =~ m/^(?:ERROR|CLIENT_ERROR|SERVER_ERROR)/) {
-                    $status = "error: $row";
-                } else {
-                    push(@data, $row);
-            
-                    if($storage_cmds{$method}) {
-                        if($row eq "STORED\r\n") {
-                            $status = 1;
-                        } else {
-                            $status = undef;
-                        }
-                    } elsif($deletion_cmds{$method}) {
-                        if($row eq "DELETED\r\n") {
-                            $status = 1;
-                        } else {
-                            $status = undef;
-                        }
-                    } elsif($incr_decr_cmds{$method}) {
-                        if($row eq "NOT_FOUND\r\n") {
-                            $status = undef;
-                        } else {
-                            $status = trim($row);
-                        }
-                    } elsif($touch_cmds{$method}) {
-                        if($row eq "TOUCHED\r\n") {
-                            $status = 1;
-                        } else {
-                            $status = undef;
-                        }
-                    } elsif($retrieval_cmds{$method}) {
-                        push(@data, $row);
-        
+                if($storage_cmds{$method}) {
+                    if($line eq "STORED") {
+                        $status = 1;
+                    } else {
+                        $status = undef;
+                    }
+                } elsif($deletion_cmds{$method}) {
+                    if($line eq "DELETED") {
+                        $status = 1;
+                    } else {
+                        $status = undef;
+                    }
+                } elsif($incr_decr_cmds{$method}) {
+                    if($line eq "NOT_FOUND") {
+                        $status = undef;
+                    } else {
+                        $status = trim($line);
+                    }
+                } elsif($touch_cmds{$method}) {
+                    if($line eq "TOUCHED") {
+                        $status = 1;
+                    } else {
+                        $status = undef;
+                    }
+                }
+            }
+
+            if(defined($status) && $status == 0) {
+                $handle->on_read(sub {
+                    my $row = $_[0]->rbuf;
+                    $_[0]->rbuf = '';
+    
+                    # print("|$row|");
+    
+                    if($retrieval_cmds{$method}) {
+                        $data = $row;
+
                         if($row eq "END\r\n") {
                             last;
                         }
                     } elsif($stats_cmds{$method}) {
-                        push(@data, $row);
+                        $data = $row;
         
                         if($row eq "END\r\n") {
                             last;
                         }
                     }
-                }
-            });
+                });
 
-            $done->send;
+                $done->send;
+            } else {
+                $done->send;
+            }
         });
     });
 
     $done->recv;
 
-    if($status == 0) {
-        return parse_complex_response($method, \@data, $multi);
+    if(defined($status) && $status == 0) {
+        return parse_complex_response2($method, $data, $multi);
     } else {
         return $status;
     }

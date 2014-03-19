@@ -6,7 +6,19 @@ use Data::Dumper;
 
 require Exporter;
 our @ISA = qw(Exporter);
-our @EXPORT_OK = qw/validate_params parse_complex_response %all_cmds %cas_cmds %storage_cmds %retrieval_cmds %deletion_cmds %incr_decr_cmds %touch_cmds %stats_cmds/;
+our @EXPORT_OK = qw/
+    validate_params
+    parse_complex_response
+    parse_complex_response2
+    %all_cmds
+    %cas_cmds
+    %storage_cmds
+    %retrieval_cmds
+    %deletion_cmds
+    %incr_decr_cmds
+    %touch_cmds
+    %stats_cmds
+/;
 
 use constant MAX_KEY_LENGTH => 250;
 
@@ -133,6 +145,16 @@ sub parse_complex_response {
 
         return \@stats;
     }
+}
+
+sub parse_complex_response2 {
+    my ($method, $data, $multi) = @_;
+
+    # print($data);
+
+    my @data = split(/\r\n/, $data);
+
+    return parse_complex_response($method, \@data, $multi);
 }
 
 1;
