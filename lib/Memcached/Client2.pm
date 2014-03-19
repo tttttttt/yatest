@@ -268,21 +268,11 @@ sub _async_request {
                 $handle->on_read(sub {
                     my $row = $_[0]->rbuf;
                     $_[0]->rbuf = '';
-    
-                    # print("|$row|");
-    
+
                     if($retrieval_cmds{$method}) {
                         $data = $row;
-
-                        if($row eq "END\r\n") {
-                            last;
-                        }
                     } elsif($stats_cmds{$method}) {
                         $data = $row;
-        
-                        if($row eq "END\r\n") {
-                            last;
-                        }
                     }
                 });
 

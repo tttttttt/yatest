@@ -116,7 +116,30 @@ sub validate_flags {
 }
 
 sub parse_complex_response {
-    my ($method, $data, $multi) = @_;
+    my ($method, $data, $multi, $from_str) = @_;
+
+=cmnt
+|200
+VALUE set_test_key2 0 2
+25
+VALUE rrr 0 3
+yyy
+VALUE xxx 0 3
+qqq
+END
+|
+
+|25
+END
+|
+=cut
+    if($from_str) {
+        if($multi) {
+
+        } else {
+
+        }
+    }
 
     if($retrieval_cmds{$method}) {
         my (@values, $fetch_next);
@@ -150,11 +173,9 @@ sub parse_complex_response {
 sub parse_complex_response2 {
     my ($method, $data, $multi) = @_;
 
-    # print($data);
-
     my @data = split(/\r\n/, $data);
 
-    return parse_complex_response($method, \@data, $multi);
+    return parse_complex_response($method, \@data, $multi, 1);
 }
 
 1;
