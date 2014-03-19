@@ -9,6 +9,9 @@ use warnings;
 use Data::Dumper;
 use IO::Socket::INET;
 use IO::Select;
+use AnyEvent;
+use AnyEvent::Handle;
+use AnyEvent::Socket;
 use Memcached::Client2::Util qw /validate_params/;
 
 require Exporter;
@@ -129,7 +132,9 @@ sub _init {
 sub connect {
     my ($self) = @_;
 
-    $self->_connect;
+    if(!$self->{'params'}->{'async'}) {
+        $self->_connect;
+    }
 }
 
 sub _connect {
@@ -145,14 +150,12 @@ sub _connect {
     $self->{'socket'} = $socket;
 }
 
-sub _connect_async {
-
-}
-
 sub close {
     my ($self) = @_;
 
-    $self->{'socket'}->close;
+    if ($self->{'socket'}) {
+        $self->{'socket'}->close;
+    }
 }
 
 sub DESTROY {
@@ -166,7 +169,9 @@ sub _write_request {
 
     my $socket = $self->{'socket'};
 
-    print({ $self->{'socket'} } $cmd->{'request'} . (defined($cmd->{'value'}) ? $cmd->{'value'} : ''));
+    my $data = $cmd->{'request'} . (defined($cmd->{'value'}) ? $cmd->{'value'} : '');
+
+    print({ $socket } $data);
 }
 
 sub _read_response {
@@ -186,7 +191,7 @@ sub _read_response {
         die("error: $row");
     } else {
         push(@data, $row);
-        
+
         if($storage_cmds{$method}) {
             if($row eq "STORED\r\n") {
                 return 1;
@@ -259,18 +264,66 @@ sub _read_response {
     }
 }
 
-sub _do_cmd {
-    my ($self, $cmd, $method, $noreply, $get_multi) = @_;
+sub _async_request {
+    my ($self, $cmd, $method, $noreply, $multi) = @_;
 
-    $self->_write_request($cmd, $method);
-    return $self->_read_response($method, $noreply, $get_multi);
+    my $done = AnyEvent->condvar;
+
+    my $guard = tcp_connect($self->{'params'}->{'host'}, $self->{'params'}->{'port'}, sub {
+        my ($fh, $host, $port, $retry) = @_
+            or die("async connect failed ($!)");
+
+        my $handle;
+
+        $handle = AnyEvent::Handle->new(
+            'fh' => $fh,
+            'on_error' => sub {
+               $_[0]->destroy;
+            },
+            'on_eof' => sub {
+               $handle->destroy;
+            },
+        );
+
+        my $data = $cmd->{'request'} . (defined($cmd->{'value'}) ? $cmd->{'value'} : '');
+
+        $handle->push_write($data);
+        $handle->push_read('line' => sub {
+            my ($handle, $line) = @_;
+
+            $handle->on_read (sub {
+                my $row = $_[0]->rbuf;
+                $_[0]->rbuf = '';
+
+
+            });
+
+            $done->send;
+        });
+    });
+
+    $done->recv;
+    
+    return 100;
+}
+
+sub _do_cmd {
+    my ($self, $cmd, $method, $noreply, $multi) = @_;
+
+    if($self->{'params'}->{'async'}) {
+        my $data;
+        return $self->_async_request($cmd, $method, $noreply, $multi);
+    } else {
+        $self->_write_request($cmd, $method);
+        return $self->_read_response($method, $noreply, $multi);
+    }
 }
 
 sub _cmd {
     my ($self, $method, %params) = @_;
 
     validate_params($method, \%params);
-    
+
     my $multi;
 
     my $cmd = {};
